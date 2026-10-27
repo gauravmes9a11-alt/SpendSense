@@ -4,6 +4,14 @@ Smart personal finance and subscription analytics for the `spendsense` MySQL dat
 React + TypeScript + Tailwind + Recharts on the front, FastAPI + SQLAlchemy on the back.
 The app is read-only: it never creates, alters or drops anything in your database.
 
+
+## Team Information
+| Name | SRN |
+|------|-----|
+| Harshitha.B.T | PES1UG24AM118 |
+| Gaurav Shivakumar | PES1UG24AM104 |
+
+
 ```
 frontend/   React app (Vite, port 5173)
 backend/    FastAPI app (port 8000), reads credentials from backend/.env
