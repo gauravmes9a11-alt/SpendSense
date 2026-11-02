@@ -125,3 +125,36 @@ Settings shows which of these objects exist right now.
 `/api/subscriptions/{unused,price-changes}`, `/api/anomalies`, `/api/anomalies/dynamic`, `/api/analytics/spending`,
 `/api/database/{tables,schema,table-preview}`, and `POST /api/database/query` (read-only console).
 All SQL uses bound parameters; table names are checked against `information_schema` before being quoted.
+
+
+## Level 3 Experiential Learning Database Features
+
+### 1. Multi-Paradigm Architecture
+- **Relational SQL (MySQL 8.0 InnoDB)**: Core ledger, subscriptions, and financial transactions requiring strict ACID compliance, Foreign Key referential integrity, and Windowing functions.
+- **NoSQL Document Store (JSON Collections)**: Semi-structured receipt storage (
+osql_vector.py) supporting flexible schemas, itemized line items, and an aggregation pipeline ($match, $group, $sum).
+- **Vector Database (Semantic Search Engine)**: Coordinate token-vector space with Cosine Similarity metric for natural language semantic query retrieval across transactions.
+
+### 2. Advanced Database Concepts
+- **Triggers**:
+  - 	rg_track_price_change (AFTER UPDATE ON subscriptions): Automatically logs price drift into subscription_price_history.
+  - 	rg_flag_large_transaction (AFTER INSERT ON 	ransactions): Automatically flags single transactions $\ge ₹10,000$ into nomaly_flags.
+- **Stored Functions & Procedures**:
+  - n_annualized_cost(price, cycle): Deterministic yearly cost calculation.
+  - sp_monthly_category_report(user_id): Generates category spending breakdowns.
+- **Window Functions**:
+  - LAG() OVER (PARTITION BY user_id, merchant_id ORDER BY transaction_date): Automatically detects weekly, monthly, quarterly, and annual payment cycles.
+  - AVG() OVER and STDDEV_POP() OVER: Dynamic Z-score statistical outlier detection.
+- **Views**:
+  - _monthly_category_spending
+  - _unused_subscriptions (30-day inactivity filter)
+  - _recurring_payment_candidates
+
+### 3. Role-Based Access Control (RBAC)
+- Minimum 2 Roles: ADMIN and CUSTOMER enforced in database schema (users.role) and API endpoints (POST /api/auth/login, GET /api/admin/system-stats).
+
+### 4. Team Member Contribution Breakdown
+| Member | Responsibilities & Contributions |
+| :--- | :--- |
+| **Gaurav Shivakumar** (PES1UG24AM104) | Core backend routing, Vercel serverless integration, initial SQL schema setup, transaction CSV export, connection pooling. |
+| **Harshitha B T** (PES1UG24AM118) | Advanced SQL design (triggers, stored functions, views, window functions), NoSQL document store, Vector semantic search engine, RBAC authentication, and test verification suite. |
