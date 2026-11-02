@@ -4,3 +4,4 @@ SQLAlchemy>=2.0,<2.1
 PyMySQL>=1.1,<2.0
 cryptography>=42.0
 python-dotenv>=1.0,<2.0
+mangum>=0.17,<1.0

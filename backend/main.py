@@ -23,10 +23,12 @@ log = logging.getLogger("spendsense.api")
 
 app = FastAPI(title="SpendSense API", version="1.0.0", description="Read-only analytics API for the SpendSense MySQL database.")
 
-origins = [o.strip() for o in os.getenv("CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173").split(",") if o.strip()]
+_cors_raw = os.getenv("CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173")
+origins = [o.strip() for o in _cors_raw.split(",") if o.strip()]
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
+    allow_origin_regex=r"https://.*\.vercel\.app",
     allow_methods=["GET", "POST"],
     allow_headers=["*"],
     expose_headers=["X-DB-Time-Ms", "X-DB-Queries", "Content-Disposition"],
