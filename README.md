@@ -8,8 +8,8 @@ The app is read-only: it never creates, alters or drops anything in your databas
 ## Team Information
 | Name | SRN |
 |------|-----|
-| Harshitha.B.T | PES1UG24AM118 |
 | Gaurav Shivakumar | PES1UG24AM104 |
+| Harshitha.B.T | PES1UG24AM118 |
 
 
 ```
