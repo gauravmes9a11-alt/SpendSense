@@ -123,7 +123,7 @@ export default function Transactions() {
         {badRange && <p className="px-4 pt-3 text-sm text-warn">The start date is after the end date. Adjust the range to see results.</p>}
         <div className="flex flex-wrap items-center justify-between gap-2 px-4 pt-3 text-xs text-muted">
           <div>
-            {q && (
+            {q ? (
               <span className="inline-flex items-center gap-1.5 rounded-md border border-accent/25 bg-accent/8 px-2.5 py-1 text-accent">
                 <Sparkles size={12} />
                 <span>
@@ -131,6 +131,23 @@ export default function Transactions() {
                   {res.data?.embedding_model && ` (${res.data.embedding_model})`}
                 </span>
               </span>
+            ) : (
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-muted">Vector distance calculates against a query. Try:</span>
+                {["Food & groceries", "Streaming subscriptions", "Cloud & software", "Transit fares"].map((ex) => (
+                  <button
+                    key={ex}
+                    type="button"
+                    onClick={() => {
+                      setSearch(ex);
+                      setPage(1);
+                    }}
+                    className="rounded border border-line bg-lift/40 px-2 py-0.5 text-[11px] text-slate-300 hover:border-accent/50 hover:bg-accent/10 hover:text-accent transition-colors"
+                  >
+                    "{ex}"
+                  </button>
+                ))}
+              </div>
             )}
           </div>
           <Lineage from={["transactions", "merchants", "categories", "users", "transaction_embeddings"]} state={res} />
