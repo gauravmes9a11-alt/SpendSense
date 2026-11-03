@@ -13,6 +13,7 @@ DROP TABLE IF EXISTS anomaly_flags;
 DROP TABLE IF EXISTS usage_logs;
 DROP TABLE IF EXISTS subscription_price_history;
 DROP TABLE IF EXISTS subscriptions;
+DROP TABLE IF EXISTS transaction_embeddings;
 DROP TABLE IF EXISTS transactions;
 DROP TABLE IF EXISTS recurring_groups;
 DROP TABLE IF EXISTS merchants;
@@ -94,6 +95,16 @@ CREATE TABLE transactions (
     INDEX idx_tx_user_date (user_id, transaction_date),
     INDEX idx_tx_category_date (category_id, transaction_date),
     INDEX idx_tx_merchant_date (merchant_id, transaction_date)
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS transaction_embeddings (
+    transaction_id BIGINT PRIMARY KEY,
+    embedding_model VARCHAR(80) NOT NULL,
+    dimensions INT NOT NULL,
+    embedding JSON NOT NULL,
+    text_content VARCHAR(500) NOT NULL,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    CONSTRAINT fk_tx_embedding FOREIGN KEY (transaction_id) REFERENCES transactions(transaction_id) ON DELETE CASCADE
 ) ENGINE=InnoDB;
 
 CREATE TABLE subscription_price_history (

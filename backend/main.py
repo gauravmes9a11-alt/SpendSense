@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import SQLAlchemyError
 
 import db
+import embeddings
 from sqlguard import SqlRejected, run_readonly
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -90,6 +91,7 @@ REQUIRED_OBJECTS = [
     ("v_monthly_category_spending", "view", "Database Explorer (demo view)"),
     (RECURRING_VIEW, "view", "Recurring Payments"),
     (UNUSED_VIEW, "view", "Subscriptions - Unused (optional; live query used if absent)"),
+    ("transaction_embeddings", "table", "Transactions (vector embeddings & semantic search)"),
 ]
 
 
@@ -132,7 +134,13 @@ TX_COLS = (
     "t.transaction_type, t.description, t.source, t.created_at, t.subscription_id, "
     "s.subscription_name, m.merchant_name, c.category_name"
 )
-TX_SORT = {"date": "t.transaction_date", "amount": "t.amount", "merchant": "m.merchant_name", "id": "t.transaction_id"}
+TX_SORT = {
+    "date": "t.transaction_date",
+    "amount": "t.amount",
+    "merchant": "m.merchant_name",
+    "id": "t.transaction_id",
+    "vector_distance": "t.transaction_date",
+}
 
 UserId = Query(None, ge=1, description="Limit to one user")
 
@@ -260,49 +268,129 @@ def top_merchants(user_id: Optional[int] = UserId, limit: int = Query(6, ge=1, l
 @app.get("/api/transactions")
 def list_transactions(
     q: Optional[str] = Query(None, max_length=100),
+    semantic: bool = Query(True, description="Enable semantic vector search when q is provided"),
     user_id: Optional[int] = UserId,
     category_id: Optional[int] = Query(None, ge=1),
     type: Optional[str] = Query(None, pattern="^(EXPENSE|INCOME)$"),
     date_from: Optional[date] = None,
     date_to: Optional[date] = None,
-    sort: str = Query("date", pattern="^(date|amount|merchant|id)$"),
+    sort: str = Query("date", pattern="^(date|amount|merchant|id|vector_distance)$"),
     order: str = Query("desc", pattern="^(asc|desc)$"),
     page: int = Query(1, ge=1),
     page_size: int = Query(15, ge=1, le=200),
 ):
     _check_range(date_from, date_to)
-    where, p = _tx_where(q, user_id, category_id, type, date_from, date_to)
-    total = db.scalar(f"SELECT COUNT(*) {TX_FROM} WHERE {where}", p)
-    order_sql = f"{TX_SORT[sort]} {'ASC' if order == 'asc' else 'DESC'}, t.transaction_id DESC"
-    items = db.query(
-        f"SELECT {TX_COLS} {TX_FROM} WHERE {where} ORDER BY {order_sql} LIMIT :lim OFFSET :off",
-        {**p, "lim": page_size, "off": (page - 1) * page_size},
-    )
+
+    has_query = bool(q and q.strip())
+    is_semantic = has_query and semantic
+    distances: dict[int, float] = {}
+
+    if is_semantic:
+        try:
+            distances = embeddings.calculate_distances_for_query(q.strip())
+        except Exception as err:
+            log.warning("Vector search calculation error: %s", err)
+            distances = {}
+
+    # In semantic mode, natural language queries (e.g. "food and dining") shouldn't be
+    # blocked by rigid SQL LIKE substring matching. Relational filters still apply.
+    sql_q = None if is_semantic else q
+    where, p = _tx_where(sql_q, user_id, category_id, type, date_from, date_to)
+
+    if sort == "vector_distance" and is_semantic:
+        # Retrieve candidate set, score with cosine distance, and sort globally
+        all_items = db.query(f"SELECT {TX_COLS} {TX_FROM} WHERE {where}", p)
+        for item in all_items:
+            item["vector_distance"] = distances.get(item["transaction_id"])
+
+        rev = (order == "desc")
+        all_items.sort(
+            key=lambda x: (
+                x["vector_distance"] is None,
+                -(x["vector_distance"] or 0) if rev else (x["vector_distance"] or 999.0),
+            )
+        )
+        total = len(all_items)
+        items = all_items[(page - 1) * page_size : page * page_size]
+    else:
+        sql_sort = "date" if sort == "vector_distance" else sort
+        total = db.scalar(f"SELECT COUNT(*) {TX_FROM} WHERE {where}", p)
+        order_sql = f"{TX_SORT[sql_sort]} {'ASC' if order == 'asc' else 'DESC'}, t.transaction_id DESC"
+        items = db.query(
+            f"SELECT {TX_COLS} {TX_FROM} WHERE {where} ORDER BY {order_sql} LIMIT :lim OFFSET :off",
+            {**p, "lim": page_size, "off": (page - 1) * page_size},
+        )
+        for item in items:
+            item["vector_distance"] = distances.get(item["transaction_id"]) if is_semantic else None
+
     total = _i(total)
-    return {"items": items, "total": total, "page": page, "page_size": page_size, "total_pages": max(1, -(-total // page_size))}
+    return {
+        "items": items,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": max(1, -(-total // page_size)),
+        "semantic_active": is_semantic,
+        "embedding_model": embeddings.get_model_name(),
+    }
 
 
 @app.get("/api/transactions/export")
 def export_transactions(
     q: Optional[str] = Query(None, max_length=100),
+    semantic: bool = Query(True),
     user_id: Optional[int] = UserId,
     category_id: Optional[int] = Query(None, ge=1),
     type: Optional[str] = Query(None, pattern="^(EXPENSE|INCOME)$"),
     date_from: Optional[date] = None,
     date_to: Optional[date] = None,
-    sort: str = Query("date", pattern="^(date|amount|merchant|id)$"),
+    sort: str = Query("date", pattern="^(date|amount|merchant|id|vector_distance)$"),
     order: str = Query("desc", pattern="^(asc|desc)$"),
 ):
     """CSV of the currently filtered result set (capped at 50,000 rows)."""
     _check_range(date_from, date_to)
-    where, p = _tx_where(q, user_id, category_id, type, date_from, date_to)
-    rows = db.query(
-        f"SELECT {TX_COLS} {TX_FROM} WHERE {where} "
-        f"ORDER BY {TX_SORT[sort]} {'ASC' if order == 'asc' else 'DESC'}, t.transaction_id DESC LIMIT 50000",
-        p,
-    )
-    fields = ["transaction_id", "user_name", "transaction_date", "merchant_name", "category_name", "transaction_type",
-              "amount", "description", "source", "subscription_name"]
+    has_query = bool(q and q.strip())
+    is_semantic = has_query and semantic
+    distances: dict[int, float] = {}
+
+    if is_semantic:
+        try:
+            distances = embeddings.calculate_distances_for_query(q.strip())
+        except Exception as err:
+            log.warning("Vector export distance calculation error: %s", err)
+            distances = {}
+
+    sql_q = None if is_semantic else q
+    where, p = _tx_where(sql_q, user_id, category_id, type, date_from, date_to)
+
+    if sort == "vector_distance" and is_semantic:
+        rows = db.query(f"SELECT {TX_COLS} {TX_FROM} WHERE {where} LIMIT 50000", p)
+        for r in rows:
+            r["vector_distance"] = distances.get(r["transaction_id"])
+        rev = (order == "desc")
+        rows.sort(
+            key=lambda x: (
+                x["vector_distance"] is None,
+                -(x["vector_distance"] or 0) if rev else (x["vector_distance"] or 999.0),
+            )
+        )
+    else:
+        sql_sort = "date" if sort == "vector_distance" else sort
+        rows = db.query(
+            f"SELECT {TX_COLS} {TX_FROM} WHERE {where} "
+            f"ORDER BY {TX_SORT[sql_sort]} {'ASC' if order == 'asc' else 'DESC'}, t.transaction_id DESC LIMIT 50000",
+            p,
+        )
+        for r in rows:
+            r["vector_distance"] = distances.get(r["transaction_id"]) if is_semantic else None
+
+    fields = [
+        "transaction_id", "user_name", "transaction_date", "merchant_name",
+        "category_name", "transaction_type", "amount"
+    ]
+    if is_semantic:
+        fields.append("vector_distance")
+    fields.extend(["description", "source", "subscription_name"])
 
     def safe(v: Any) -> Any:  # neutralise spreadsheet formula injection
         return "'" + v if isinstance(v, str) and v[:1] in ("=", "+", "-", "@") else v
@@ -311,13 +399,45 @@ def export_transactions(
     w = csv.writer(buf)
     w.writerow(fields)
     for r in rows:
-        w.writerow([safe(r.get(f)) if r.get(f) is not None else "" for f in fields])
+        row_cells = []
+        for f in fields:
+            val = r.get(f)
+            if f == "vector_distance":
+                row_cells.append(f"{val:.4f}" if val is not None else "")
+            elif val is not None:
+                row_cells.append(safe(val))
+            else:
+                row_cells.append("")
+        w.writerow(row_cells)
+
     name = f"spendsense_transactions_{date.today().isoformat()}.csv"
     return StreamingResponse(
         iter(["\ufeff" + buf.getvalue()]),
         media_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": f'attachment; filename="{name}"'},
     )
+
+
+# --------------------------------------------------------------------------- embeddings info & sync
+@app.get("/api/embeddings/info")
+def embedding_info():
+    """Information about active vector embedding model, dimension, and stored records."""
+    count = db.scalar("SELECT COUNT(*) FROM transaction_embeddings")
+    total_tx = db.scalar("SELECT COUNT(*) FROM transactions")
+    return {
+        "model": embeddings.get_model_name(),
+        "dimensions": 384,
+        "embedded_transactions": _i(count),
+        "total_transactions": _i(total_tx),
+        "distance_metric": "Cosine Distance (1 - Cosine Similarity)",
+    }
+
+
+@app.post("/api/embeddings/sync")
+def sync_embeddings():
+    """Trigger embedding generation for any unembedded transactions."""
+    synced = embeddings.sync_missing_embeddings()
+    return {"status": "ok", "newly_synced": synced}
 
 
 # --------------------------------------------------------------------------- recurring payments

@@ -45,6 +45,16 @@ CREATE TABLE IF NOT EXISTS transactions (
     FOREIGN KEY (category_id) REFERENCES categories(category_id)
 );
 
+CREATE TABLE IF NOT EXISTS transaction_embeddings (
+    transaction_id INT PRIMARY KEY,
+    embedding_model VARCHAR(80) NOT NULL,
+    dimensions INT NOT NULL,
+    embedding JSON NOT NULL,
+    text_content VARCHAR(500) NOT NULL,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    FOREIGN KEY (transaction_id) REFERENCES transactions(transaction_id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS usage_logs (
     usage_id INT PRIMARY KEY AUTO_INCREMENT,
     subscription_id INT NOT NULL,
