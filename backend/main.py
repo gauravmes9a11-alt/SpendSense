@@ -1,4 +1,6 @@
-"""SpendSense API (FastAPI). Read-only analytics over the existing `spendsense` MySQL database."""
+"""SpendSense API (FastAPI). 
+Read-only analytics over the existing `spendsense` MySQL database."""
+
 from __future__ import annotations
 
 import csv
@@ -7,9 +9,17 @@ import logging
 import os
 import re
 from datetime import date, datetime, timezone
+from datetime import timedelta
 from typing import Any, Optional
 
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import (
+    FastAPI,
+    HTTPException,
+    Query,
+    Request,
+    Depends,
+)
+
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
@@ -18,6 +28,15 @@ from sqlalchemy.exc import SQLAlchemyError
 import db
 import embeddings
 from sqlguard import SqlRejected, run_readonly
+
+from auth import (
+    hash_password,
+    verify_password,
+    create_access_token,
+    get_current_user,
+    require_admin,
+    require_authenticated_user,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("spendsense.api")
@@ -840,11 +859,54 @@ def console_query(body: ConsoleQuery):
 # --------------------------------------------------------------------------- Authentication & RBAC (Rubric #12)
 class LoginRequest(BaseModel):
     email: str
-    role: Optional[str] = "CUSTOMER"
+    password: str
 
 @app.post("/api/auth/login")
+def login(request: LoginRequest):
+    # Find user by email
+    user = db.one(
+        """
+        SELECT user_id, full_name, email, role, password_hash
+        FROM users
+        WHERE email = :email
+        """,
+        {"email": request.email},
+    )
+
+    # Reject invalid email or password
+    if not user or not verify_password(
+        request.password,
+        user.get("password_hash")
+    ):
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid email or password",
+        )
+
+    # Create JWT token
+    access_token = create_access_token(
+        {
+            "sub": str(user["user_id"]),
+            "role": user["role"],
+        },
+        expires_delta=timedelta(minutes=1440),
+    )
+
+    # Return token and user details
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "user": {
+            "user_id": user["user_id"],
+            "full_name": user["full_name"],
+            "email": user["email"],
+            "role": user["role"],
+        },
+    }
+
+"""Simulates Role-Based Access Control login. Validates user in database and returns permissions.
 def auth_login(req: LoginRequest):
-    """Simulates Role-Based Access Control login. Validates user in database and returns permissions."""
+    
     user = db.one("SELECT user_id, full_name, email, role FROM users WHERE email = :email", {"email": req.email})
     if not user:
         # Fallback to demo users if table doesn't have role yet
@@ -865,12 +927,13 @@ def auth_login(req: LoginRequest):
         "role": role,
         "permissions": ["READ", "WRITE", "EXPORT", "AUDIT_LOGS"] if role == "ADMIN" else ["READ", "EXPORT"],
     }
+"""
 
 @app.get("/api/admin/system-stats")
-def admin_stats(role: str = Query("ADMIN", description="User role for RBAC check")):
+def admin_stats(current_user: dict = Depends(require_admin)):
     """Admin-only endpoint demonstrating Role-Based Access Control (RBAC)."""
-    if role.upper() != "ADMIN":
-        raise HTTPException(status_code=403, detail="Access Forbidden: ADMIN role required to view system statistics.")
+    # if role.upper() != "ADMIN":
+        # raise HTTPException(status_code=403, detail="Access Forbidden: ADMIN role required to view system statistics.")
     total_users = db.scalar("SELECT COUNT(*) FROM users") or 0
     total_tx = db.scalar("SELECT COUNT(*) FROM transactions") or 0
     total_subs = db.scalar("SELECT COUNT(*) FROM subscriptions") or 0
